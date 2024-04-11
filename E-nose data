@@ -1,0 +1,117 @@
+int mq135SensorPin = 35; // MQ135 connected to A0
+int mq4SensorPin = 34; // MQ135 connected to A0
+float RL = 10.0; // Load resistance in kilo ohms
+float R0 = 76.63; // Sensor resistance in clean air. Adjust this value based on your calibration
+float voltage = 3.3; // Assuming a 5V system
+int adcBits = 10; // ADC resolution in bits (for Arduino Uno/Nano/Mega etc. is 10 bits)
+int ave = 10; // Number of readings for averaging
+
+// Benzene constants (placeholders, need calibration)
+float aBenzene = 1.0; // Example calibration constant for benzene
+float bBenzene = -1.0; // Example exponent constant for benzene
+
+int R01 = 176;
+int R2 = 1000;
+float RS;
+float RS1;
+float PPM_acetone;
+float PPM_toluene;
+
+
+#include <WiFi.h>
+#include "ThingSpeak.h" // always include thingspeak header file after other header files and custom macros
+
+char ssid[] = "enose";   // your network SSID (name) 
+char pass[] = "12345678";   // your network password
+
+WiFiClient  client;
+
+unsigned long myChannelNumber = 2499099;
+const char * myWriteAPIKey = "9XK0C98M4QZO0BKL";
+
+// Initialize our values
+int count=15;
+void setup() {
+  Serial.begin(9600);
+  WiFi.mode(WIFI_STA);   
+  ThingSpeak.begin(client);
+}
+
+
+float adcAverage(int pin, int samples) {
+  long sum = 0;
+  for(int i = 0; i < samples; i++) {
+    sum += analogRead(pin);
+  }
+  return (float)sum / samples;
+}
+
+float getResistance(int pin, int samples, float RL, int adcBits, float voltage) {
+  float adcAvg = adcAverage(pin, samples);
+  float volts = adcAvg * (voltage / pow(2, adcBits));
+  float RS = (voltage - volts) * RL / volts; // Calculate sensor resistance
+  return RS;
+}
+
+float getPPM(float RS, float R0) {
+  return aBenzene * pow((RS/R0), bBenzene);
+}
+
+void loop() {
+  if(WiFi.status() != WL_CONNECTED){
+    Serial.print("Attempting to connect to SSID: ");
+    while(WiFi.status() != WL_CONNECTED){
+      WiFi.begin(ssid, pass);  // Connect to WPA/WPA2 network. Change this line if using open or WEP network
+      Serial.print(".");
+      delay(5000);     
+    } 
+    Serial.println("\nConnected.");
+  }
+  float RS = getResistance(mq135SensorPin, ave, RL, adcBits, voltage);
+  
+  float ppmBenzene = getPPM(RS, R0);
+
+  
+  int sensorValue = analogRead(mq135SensorPin);
+  float volts = sensorValue * 3.3;
+    volts = volts / 4094;
+    // calculate RS
+    RS = R2 * (1-volts);
+    RS = RS/volts;
+    // calculate acetone PPM
+    PPM_acetone = 159.6 - 133.33*(RS/R01);
+    // print out the acetone concentration:
+  int sensorValue1 = analogRead(mq4SensorPin);
+  float volts1 = sensorValue1 * 3.3;
+    volts1 = volts1 / 4094;
+    // calculate RS
+    RS1 = R2 * (1-volts1);
+    RS1 = RS1/volts1;
+    // calculate acetone PPM
+    PPM_toluene  = 259.6 - 133.33*(RS1/R01);
+    // print out the acetone concentration:
+    Serial.print("Benzene PPM: ");
+    Serial.println(ppmBenzene);
+    Serial.print("PPM_acetone: ");
+    Serial.println(PPM_acetone);
+    Serial.print("PPM_toluene: ");
+    Serial.println(PPM_toluene);
+    ThingSpeak.setField(1, PPM_acetone);
+    ThingSpeak.setField(2, ppmBenzene);
+    ThingSpeak.setField(3, PPM_toluene);
+    if(count==15){
+    int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+    if(x == 200){
+      Serial.println("Channel update successful.");
+    }
+    else{
+      Serial.println("Problem updating channel. HTTP error code " + String(x));
+    }
+    }
+    Serial.println(count);
+    count--;
+    if(count==0){
+      count=15;
+    }
+    delay(1000);
+}
